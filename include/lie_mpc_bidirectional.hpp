@@ -1,5 +1,7 @@
 # include "optimization.h"
 # include <math.h>
+# include <stdlib.h>
+# include <stdio.h>
 
 namespace al = alglib;
 
@@ -17,7 +19,7 @@ class LieMPC {
     // Default constructor
     LieMPC()
     {
-      n_x = 12;
+      nx = 12;
       ny = 6;
       nu = 4;
       x.setlength(nx);
@@ -27,7 +29,7 @@ class LieMPC {
       R.setlength(nu, nu);
       np = 32;
       ts = 0.02;
-    }
+    };
 
     // Constructor used to specify prediction horizon, timestep, and weights
     LieMPC(int n_p, double timestep, al::real_2d_array y_weight, al::real_2d_array u_weight)
@@ -42,5 +44,5 @@ class LieMPC {
       ts = timestep;
       Q = y_weight;
       R = u_weight;
-    }
-}
+    };
+};
