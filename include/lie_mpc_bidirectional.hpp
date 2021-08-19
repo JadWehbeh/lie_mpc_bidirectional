@@ -13,6 +13,7 @@ class LieMPC {
   Eigen::Matrix<double, 6, 1> y;  // Output vector
   Eigen::Vector4d u;              // Control input vector
   Eigen::Vector4d u_lin;          // Linearization control input
+  Eigen::VectorXd Y;              // Target trajectory
 
   private:
   // MPC parameters
@@ -25,13 +26,11 @@ class LieMPC {
   // Linear system Matrices
   Eigen::Matrix<double, 12, 12> _Ac = Eigen::Matrix<double, 12, 12>::Zero(); // Continuous state matrix
   Eigen::Matrix<double, 12, 4> _Bc = Eigen::Matrix<double, 12, 4>::Zero();   // Continuous input matrix
-  Eigen::Matrix<double, 6, 12> _Cc = Eigen::Matrix<double, 6, 12>::Zero();   // Continuous output matrix
   Eigen::Matrix<double, 12, 1> _f;                                           // Constant offset matrix
   Eigen::Matrix<double, 12, 1> _f_t;                                         // Time-variant offset matrix
   Eigen::Matrix<double, 12, 12> _A;                                          // Discrete state matrix
   Eigen::Matrix<double, 12, 4> _B;                                           // Discrete input matrix
-  Eigen::Matrix<double, 6, 12> _C;                                           // Discrete output matrix
-  Eigen::Matrix<double, 6, 4> _D;                                            // Discrete feedthrough matrix
+  Eigen::Matrix<double, 6, 12> _C = Eigen::Matrix<double, 6, 12>::Zero();    // Discrete output matrix
 
   // Misc matrix definitions
   Eigen::Matrix<double, 4, 4> _Gamma;               // Control allocation matrix
@@ -61,15 +60,27 @@ class LieMPC {
   // MPC Matrices
   Eigen::MatrixXd _H;
   Eigen::VectorXd _F;
+  Eigen::MatrixXd _H_f;
+  Eigen::VectorXd _F_f;
   Eigen::MatrixXd _G;
   Eigen::MatrixXd _C_bar;
-  Eigen::MatrixXd _D_bar;
+  Eigen::VectorXd _dY;
+  Eigen::VectorXd _U_lin;
 
   // Optimization variables
-  al::real_1d_array _U;             // Control input prediction
+  al::real_1d_array _U;             // Control input predictioni
+  al::real_1d_array _U0;            // Initial control input
+  al::real_2d_array _MPC_H;         // Quadratic program H matrix
+  al::real_1d_array _MPC_F;         // Quadratic program F matrix
+  Eigen::MatrixXd _MPC_H_Eig;       // Eigen Quadratic program H matrix
+  Eigen::VectorXd _MPC_F_Eig;       // Eigen Quadratic program F matrixi
   Eigen::Matrix<double, 6, 6> _q;   // Output weighting matrix
   Eigen::Matrix<double, 4, 4> _r;   // Control input weighting matrix
-  Eigen::Matrix<double, 6, 6> _q_f; // Terminal cost weighting matrix
+  Eigen::Matrix<double, 6, 6> _q_f; // Terminal output weighting matrix
+  Eigen::MatrixXd _Q;               // General output weighting matrix
+  Eigen::MatrixXd _R;               // General input weighting matrix
+  al::minqpstate _qpstate;          // State for Quadratic Program
+  al::minqpreport _qpreport;        // Report for QP solver
 
   // Constraint handling
   Eigen::Vector4d _t_input;  // Time for thrust constraint
@@ -90,7 +101,14 @@ class LieMPC {
   double _t_ramp = 0.25; // Thrust ramp time (s)
 
   // Calculation Variables;
+  Eigen::Matrix3d _Rotm;
   Eigen::Vector3d _gamma;
+  Eigen::Vector4d _u_tm;
+  int _disc_j;
+  double _disc_T;
+  double _disc_Tk;
+  Eigen::Matrix<double, 12, 12> _E;
+  Eigen::Matrix<double, 12, 12> _Ek;
   Eigen::Matrix<double, 12, 12> _Ak;
   Eigen::Matrix<double, 12, 4> _ABk;
   Eigen::Matrix<double, 12, 1> _Afk;
@@ -111,8 +129,8 @@ class LieMPC {
   LieMPC()
   {
     // Set default parameter values
-    _np = 32;
-    _ts = 0.01;
+    _np = 8;
+    _ts = 0.04;
     _J(0, 0) = _j_xx;
     _J(1, 1) = _j_yy;
     _J(2, 2) = _j_zz;
@@ -140,22 +158,45 @@ class LieMPC {
     _Bc.block(9, 1, 3, 3) = _B_wm;
 
     // Assign output matrix parts;
-    _Cc.block(0, 0, 3, 3) = _I;
-    _Cc.block(3, 6, 3, 3) = _I;
+    _C.block(0, 0, 3, 3) = _I;
+    _C.block(3, 6, 3, 3) = _I;
 
     // Set matrix sizes
+    Y.resize(12 * _np);
     _H.resize(_nx * _np, _nu * _np);
     _F.resize(_nx * _np);
     _G.resize(_nx * _np, _nx);
     _C_bar.resize(_ny * _np, _nx * _np);
-    _H = Eigen::MatrixXd::Zero(_nx * _np, _nu * _np);
-    _F = Eigen::VectorXd::Zero(_nx * _np);
-    _G = Eigen::MatrixXd::Zero(_nx * _np, _nx);
-    _C_bar = Eigen::MatrixXd::Zero(_ny * _np, _nx * _np);
-    _D_bar = Eigen::MatrixXd::Zero(_ny * _np, _nu * _np);
+    _Q.resize(_ny * _np, _ny * _np);
+    _R.resize(_nu * _np, _nu * _np);
+    _H_f.resize(_nx, _nu * _np);
+    _F_f.resize(_nx);
+    _dY.resize(_ny * _np);
+    _U_lin.resize(_nu * _np);
+    _MPC_H_Eig.resize(_np * _nu, _np * _nu);
+    _MPC_F_Eig.resize(_np * _nu);
     _U.setlength(_np * _nu);
+    _U0.setlength(_np * _nu);
     _u_bndl.setlength(_np * _nu);
     _u_bndh.setlength(_np * _nu);
+
+    // Initialize matrix values
+    _H = Eigen::MatrixXd::Zero(_nx * _np, _nu * _np);
+    _F = Eigen::VectorXd::Zero(_nx * _np);
+    _H_f = Eigen::MatrixXd::Zero(_nx, _nu * _np);
+    _F_f = Eigen::VectorXd::Zero(_nx);
+    _G = Eigen::MatrixXd::Zero(_nx * _np, _nx);
+    _C_bar = Eigen::MatrixXd::Zero(_ny * _np, _nx * _np);
+    _Q = Eigen::MatrixXd::Zero(_ny * _np, _ny * _np);
+    _R = Eigen::MatrixXd::Zero(_nu * _np, _nu * _np);
+
+    // Initialize QP Solver
+    al::minqpcreate(_nu * _np, _qpstate);
+    for (int i = 0; i < _np * _nu; i++) {
+      _U0(i) = _m * _g / 4;
+    }
+    al::minqpsetscale(_qpstate, _U0);
+    al::minqpsetalgoquickqp(_qpstate, 1.e-4, 1.e-4, 1.e-4, 1000, true);
   };
 
   // Constructor used to specify prediction horizon, timestep, and weights
@@ -184,31 +225,48 @@ class LieMPC {
     _Bc.block(9, 1, 3, 3) = _B_wm;
 
     // Assign output matrix parts;
-    _Cc.block(0, 0, 3, 3) = _I;
-    _Cc.block(3, 6, 3, 3) = _I;
+    _C.block(0, 0, 3, 3) = _I;
+    _C.block(3, 6, 3, 3) = _I;
 
-    // Set matrix sizes
+    // Set matrix sizeis
+    Y.resize(12 * _np);
     _H.resize(_nx * _np, _nu * _np);
     _F.resize(_nx * _np);
     _G.resize(_nx * _np, _nx);
     _C_bar.resize(_ny * _np, _nx * _np);
-    _H = Eigen::MatrixXd::Zero(_nx * _np, _nu * _np);
-    _F = Eigen::VectorXd::Zero(_nx * _np);
-    _G = Eigen::MatrixXd::Zero(_nx * _np, _nx);
-    _C_bar = Eigen::MatrixXd::Zero(_ny * _np, _nx * _np);
-    _D_bar = Eigen::MatrixXd::Zero(_ny * _np, _nu * _np);
+    _Q.resize(_ny * _np, _ny * _np);
+    _R.resize(_nu * _np, _nu * _np);
+    _H_f.resize(_nx, _nu * _np);
+    _F_f.resize(_nx);
+    _dY.resize(_ny * _np);
+    _U_lin.resize(_nu * _np);
+    _MPC_H_Eig.resize(_np * _nu, _np * _nu);
+    _MPC_F_Eig.resize(_np * _nu);
     _U.setlength(_np * _nu);
     _u_bndl.setlength(_np * _nu);
     _u_bndh.setlength(_np * _nu);
+
+    // Initialize matrix values
+    _H = Eigen::MatrixXd::Zero(_nx * _np, _nu * _np);
+    _F = Eigen::VectorXd::Zero(_nx * _np);
+    _H_f = Eigen::MatrixXd::Zero(_nx, _nu * _np);
+    _F_f = Eigen::VectorXd::Zero(_nx);
+    _G = Eigen::MatrixXd::Zero(_nx * _np, _nx);
+    _C_bar = Eigen::MatrixXd::Zero(_ny * _np, _nx * _np);
+    _Q = Eigen::MatrixXd::Zero(_ny * _np, _ny * _np);
+    _R = Eigen::MatrixXd::Zero(_nu * _np, _nu * _np);
   };
 
   void linearize()
   {
     // Build rotation matrix
-    Eigen::Matrix3d _Rotm = Eigen::Map<Eigen::Matrix3d>((x.segment(6, 9)).data()).transpose();
+    _Rotm = Eigen::Map<Eigen::Matrix3d>((x.segment(6, 9)).data()).transpose();
+
+    // Calculate forces and moments;
+    _u_tm = _Gamma * u_lin;
 
     // Build state matrix components
-    _A_vp.noalias() = (1. / _m) * _Rotm * _cross_op(_1_3 * u_lin(0));
+    _A_vp.noalias() = (1. / _m) * _Rotm * _cross_op(_1_3 * _u_tm(0));
     _A_pp.noalias() = -_cross_op(x.segment(15, 3));
     _A_ww.noalias() = _J_inv * (_cross_op(_J * x.segment(15, 3)) - (_cross_op(x.segment(15, 3)) * _J));
 
@@ -217,9 +275,9 @@ class LieMPC {
 
     // Build offset matrix componenets
     _f_r = -x.segment(3, 3);
-    _f_v.noalias() = (1. / _m) * _Rotm * _1_3 * u_lin(0) - _1_3 * _g;
+    _f_v.noalias() = (1. / _m) * _Rotm * _1_3 * _u_tm(0) - _1_3 * _g;
     _f_p = -x.segment(15, 3);
-    _gamma.noalias() = (-_cross_op(x.segment(15, 3)) * _J * x.segment(15, 3) + u_lin.segment(1, 3));
+    _gamma.noalias() = (-_cross_op(x.segment(15, 3)) * _J * x.segment(15, 3) + _u_tm.segment(1, 3));
     _f_p_t.noalias() = -_J_inv * _gamma;
     _f_w = _f_p_t;
 
@@ -241,12 +299,19 @@ class LieMPC {
 
   void discretize()
   {
-    // Obtain discrete A and B matrices using Tustin discretization
-    _A.noalias() = (Eigen::Matrix<double, 12, 12>::Identity() - (_ts / 2.) * _Ac).householderQr().solve(Eigen::Matrix<double, 12, 12>::Identity() + (_ts / 2) * _Ac);
-    _B.noalias() = 2. * (Eigen::Matrix<double, 12, 12>::Identity() - (_ts / 2.) * _Ac).householderQr().solve((_ts / 2.) * _Bc);
-    _C.noalias() = 0.5 * _Cc * (Eigen::Matrix<double, 12, 12>::Identity() + _A);
-    _D.noalias() = 0.5 * _Cc * _B;
+    // Obtain discrete A and B matrices using a ZOH discretization
+    _Ek = Eigen::Matrix<double, 12, 12>::Identity();
+    _E = _Ek;
 
+    for (int i = 1; i < 16; i++) {
+      _Ek = _Ek * (_Ac * _ts) / (i + 1);
+      _E += _Ek;
+    }
+
+    _A = Eigen::Matrix<double, 12, 12>::Identity() + _E * _Ac * _ts;
+    _B = _E * _Bc * _ts;
+
+    // Solve for terminal cost from discrete-time algebraic Ricatti equation
     _q_f = _solve_dare(_C * _A * _C.transpose(), _C * _B, _q, _r);
   };
 
@@ -266,27 +331,51 @@ class LieMPC {
       }
 
       _C_bar.block(i * _ny, i * _nx, _ny, _nx) = _C;
-      _D_bar.block(i * _ny, i * _nu, _ny, _nu) = _D;
+      _Q.block(i * _ny, i * _ny, _ny, _ny) = _q;
+      _R.block(i * _nu, i * _nu, _nu, _nu) = _r;
       // _G.block(i * _nx, 0, _nx, _nx) = _Ak;
+
+      _dY.segment(i * _ny, 3) = x.segment(0, 3) - Y.segment(i * 12, 3);
+      _dY.segment(i * _ny + 3, 3) = -_vee_SO3(_Rotm.transpose() * Eigen::Map<Eigen::Matrix3d>((Y.segment(i * 12 + 3, 9)).data()));
+      _U_lin.segment(i * _nu, _nu) = u_lin;
 
       for (int j = 0; j + i < _np - 1; j++) {
         _F.segment(_nx * (_np - 1 - j), _nx) += _Afk;
         _H.block((j + i + 1) * _nx, j * _nu, _nx, _nu) = _ABk;
       }
+
+      _H_f.block(0, i * _nu, _nx, _nu) = _ABk;
+      _F_f += _Afk;
     }
+
+    _MPC_H_Eig.noalias() = (_C_bar * _H).transpose() * _Q * (_C_bar * _H) + (_C * _H_f).transpose() * _q_f * (_C * _H_f) + _R;
+    _MPC_F_Eig.noalias() = (_C_bar * _F - _dY).transpose() * _Q * (_C_bar * _H) + (_C * _F_f - _dY.segment((_np - 1) * _ny, _ny)).transpose() * _q_f * (_C * _H_f) - _U_lin.transpose() * _R;
   };
 
-  void build_constraints()
+  void solve()
   {
-    // Build constraint matrices for MPC
-    for (int i = 0; i < 4; i++) {
-      _t_input(i) = _inv_constraint(u_lin(i));
+    // Solve QP to obtain optimal control inputs
+    _eigen_to_al(_MPC_H_Eig, &_MPC_H);
+    _eigen_to_al(_MPC_F_Eig, &_MPC_F);
+    al::minqpsetquadraticterm(_qpstate, _MPC_H);
+    al::minqpsetlinearterm(_qpstate, _MPC_F);
 
-      for (int j = 1; j <= _np; j++) {
-        _u_bndh(i + 4 * (j - 1)) = u_lin(i) - _constraint(_t_input(i), -j);
-        _u_bndl(i + 4 * (j - 1)) = u_lin(i) - _constraint(_t_input(i), j);
+    for (int i = 0; i < 5; i++) {
+      _build_constraints();
+      al::minqpsetbc(_qpstate, _u_bndl, _u_bndh);
+      al::minqpsetstartingpoint(_qpstate, _U0);
+      al::minqpoptimize(_qpstate);
+      al::minqpresults(_qpstate, _U, _qpreport);
+      _U0 = _U;
+      if (_check_bounds(_U, _u_bndl, _u_bndh)) {
+        break;
       }
     }
+
+    u(0) = _U(0);
+    u(1) = _U(1);
+    u(2) = _U(2);
+    u(3) = _U(3);
   };
 
   private:
@@ -301,6 +390,11 @@ class LieMPC {
     _M(2, 0) = -_v(1);
     _M(2, 1) = -_v(0);
     return _M;
+  };
+
+  Eigen::Vector3d _vee_SO3(Eigen::Matrix3d _rotMatrix)
+  {
+    return (Eigen::VectorXd(3) << (-_rotMatrix(1, 2) + _rotMatrix(2, 1)) / 2, (_rotMatrix(0, 2) - _rotMatrix(2, 0)) / 2, (-_rotMatrix(0, 1) + _rotMatrix(1, 0)) / 2).finished();
   };
 
   double _constraint(double _init_time, int _timesteps)
@@ -355,5 +449,46 @@ class LieMPC {
       _Hd.noalias() = _Hdk + _V1.transpose() * _Hdk * _Adk;
     }
     return _Hd;
+  };
+
+  void _eigen_to_al(Eigen::MatrixXd emat, al::real_2d_array* almat)
+  {
+    almat->setlength(emat.rows(), emat.cols());
+    for (int i = 0; i < emat.rows(); i++) {
+      for (int j = 0; j < emat.cols(); j++) {
+        almat->operator()(i, j) = emat(i, j);
+      }
+    }
+  };
+
+  void _eigen_to_al(Eigen::VectorXd emat, al::real_1d_array* almat)
+  {
+    almat->setlength(emat.rows());
+    for (int i = 0; i < emat.rows(); i++) {
+      almat->operator()(i) = emat(i);
+    }
+  };
+
+  bool _check_bounds(al::real_1d_array _U_ctrl, al::real_1d_array _U_low, al::real_1d_array _U_upp)
+  {
+    for (int i = 0; i < _np; i++) {
+      if (_U_ctrl(i) < _U_low(i) || _U_ctrl(i) > _U_upp(i)) {
+        return 0;
+      }
+    }
+    return 1;
+  };
+
+  void _build_constraints()
+  {
+    // Build constraint matrices for MPC
+    for (int i = 0; i < 4; i++) {
+      _t_input(i) = _inv_constraint(u_lin(i));
+
+      for (int j = 1; j <= _np; j++) {
+        _u_bndh(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input(i), -j);
+        _u_bndl(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input(i), j);
+      }
+    }
   };
 };
