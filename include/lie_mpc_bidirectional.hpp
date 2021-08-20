@@ -26,6 +26,7 @@ class LieMPC {
   // Linear system Matrices
   Eigen::Matrix<double, 12, 12> _Ac = Eigen::Matrix<double, 12, 12>::Zero(); // Continuous state matrix
   Eigen::Matrix<double, 12, 4> _Bc = Eigen::Matrix<double, 12, 4>::Zero();   // Continuous input matrix
+  Eigen::Matrix<double, 12, 4> _Bcg;                                         // Input matrix with direct allocation
   Eigen::Matrix<double, 12, 1> _f;                                           // Constant offset matrix
   Eigen::Matrix<double, 12, 1> _f_t;                                         // Time-variant offset matrix
   Eigen::Matrix<double, 12, 12> _A;                                          // Discrete state matrix
@@ -95,7 +96,7 @@ class LieMPC {
   double _j_xx = 0.0122; // x-axis principle moment
   double _j_yy = 0.0126; // y-axis principle moment
   double _j_zz = 0.0239; // z-axis principle moment
-  double _k = 0.015625;  // Propeller yaw moment ratio
+  double _k = 1.8;       // Propeller yaw moment ratio
   double _c = 0.166;     // Propeller thrust to moment
   double _T_max = 7.0;   // Maximum thrust (N)
   double _t_ramp = 0.25; // Thrust ramp time (s)
@@ -145,7 +146,7 @@ class LieMPC {
 
     // Set default cost weights
     Eigen::Matrix<double, 6, 1> y_weight;
-    y_weight << 2.e-3, 2.e-3, 2.e-3, 100., 100., 100.;
+    y_weight << 1.e-2, 1.e-2, 1.e-2, 100., 100., 100.;
     _q = y_weight.asDiagonal();
 
     Eigen::Matrix<double, 4, 1> u_weight;
@@ -196,7 +197,7 @@ class LieMPC {
       _U0(i) = _m * _g / 4;
     }
     al::minqpsetscale(_qpstate, _U0);
-    al::minqpsetalgoquickqp(_qpstate, 1.e-4, 1.e-4, 1.e-4, 1000, true);
+    al::minqpsetalgoquickqp(_qpstate, 1e-10, 1e-10, 1e-10, 100, true);
   };
 
   // Constructor used to specify prediction horizon, timestep, and weights
@@ -287,7 +288,7 @@ class LieMPC {
     _Ac.block(9, 9, 3, 3) = _A_ww;
 
     _Bc.block(3, 0, 3, 1) = _B_vt;
-    _Bc = _Bc * _Gamma;
+    _Bcg = _Bc * _Gamma;
 
     _f.segment(0, 3) = _f_r;
     _f.segment(3, 3) = _f_v;
@@ -309,7 +310,7 @@ class LieMPC {
     }
 
     _A = Eigen::Matrix<double, 12, 12>::Identity() + _E * _Ac * _ts;
-    _B = _E * _Bc * _ts;
+    _B = _E * _Bcg * _ts;
 
     // Solve for terminal cost from discrete-time algebraic Ricatti equation
     _q_f = _solve_dare(_C * _A * _C.transpose(), _C * _B, _q, _r);
@@ -344,7 +345,7 @@ class LieMPC {
         _H.block((j + i + 1) * _nx, j * _nu, _nx, _nu) = _ABk;
       }
 
-      _H_f.block(0, i * _nu, _nx, _nu) = _ABk;
+      _H_f.block(0, (_np - i - 1) * _nu, _nx, _nu) = _ABk;
       _F_f += _Afk;
     }
 
@@ -355,6 +356,11 @@ class LieMPC {
   void solve()
   {
     // Solve QP to obtain optimal control inputs
+    for (int i = 0; i < _np; i++) {
+      for (int j = 0; j < _nu; j++) {
+        _U0(i * _nu + j) = u_lin(j);
+      }
+    }
     _eigen_to_al(_MPC_H_Eig, &_MPC_H);
     _eigen_to_al(_MPC_F_Eig, &_MPC_F);
     al::minqpsetquadraticterm(_qpstate, _MPC_H);
@@ -372,10 +378,13 @@ class LieMPC {
       }
     }
 
-    u(0) = _U(0);
-    u(1) = _U(1);
-    u(2) = _U(2);
-    u(3) = _U(3);
+    u(0) = u_lin(0) - _U(0);
+    u(1) = u_lin(1) - _U(1);
+    u(2) = u_lin(2) - _U(2);
+    u(3) = u_lin(3) - _U(3);
+
+//    std::cout << u << std::endl;
+//    printf("%s\n", _u_bndh.tostring(2).c_str());
   };
 
   private:
@@ -394,7 +403,7 @@ class LieMPC {
 
   Eigen::Vector3d _vee_SO3(Eigen::Matrix3d _rotMatrix)
   {
-    return (Eigen::VectorXd(3) << (-_rotMatrix(1, 2) + _rotMatrix(2, 1)) / 2, (_rotMatrix(0, 2) - _rotMatrix(2, 0)) / 2, (-_rotMatrix(0, 1) + _rotMatrix(1, 0)) / 2).finished();
+    return (Eigen::VectorXd(3) << (-_rotMatrix(1, 2) + _rotMatrix(2, 1)) / 2., (_rotMatrix(0, 2) - _rotMatrix(2, 0)) / 2., (-_rotMatrix(0, 1) + _rotMatrix(1, 0)) / 2.).finished();
   };
 
   double _constraint(double _init_time, int _timesteps)
@@ -435,7 +444,7 @@ class LieMPC {
     _Gd.noalias() = _Bdare * (_Rdare.householderQr().solve(_Bdare.transpose()));
     _Hd = _Qdare;
 
-    while ((_Hd - _Hdk).squaredNorm() > 1e-6 * _Hd.squaredNorm()) {
+    while ((_Hd - _Hdk).squaredNorm() > 1e-10 * _Hd.squaredNorm()) {
       _Adk = _Ad;
       _Gdk = _Gd;
       _Hdk = _Hd;
