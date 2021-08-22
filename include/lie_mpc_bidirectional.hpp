@@ -84,7 +84,7 @@ class LieMPC {
   al::minqpreport _qpreport;        // Report for QP solver
 
   // Constraint handling
-  Eigen::Vector4d _t_input;  // Time for thrust constraint
+  double _t_input;           // Time for thrust constraint
   al::real_1d_array _u_bndl; // Lower bound on thrusts
   al::real_1d_array _u_bndh; // Upper bound on thrusts
   double _T_scaled;
@@ -382,9 +382,6 @@ class LieMPC {
     u(1) = u_lin(1) - _U(1);
     u(2) = u_lin(2) - _U(2);
     u(3) = u_lin(3) - _U(3);
-
-//    std::cout << u << std::endl;
-//    printf("%s\n", _u_bndh.tostring(2).c_str());
   };
 
   private:
@@ -431,7 +428,7 @@ class LieMPC {
     if (_thrust > 0.) {
       return (std::log(_T_scaled / (1. - _T_scaled)) * _t_ramp / 12.) + _t_ramp / 2.;
     } else if (_thrust < 0.) {
-      return -(std::log(_T_scaled / (1. - _T_scaled)) * _t_ramp / 12.) - _t_ramp / 2.;
+      return -(std::log(-_T_scaled / (1. - _T_scaled)) * _t_ramp / 12.) - _t_ramp / 2.;
     } else {
       return 0.;
     }
@@ -492,11 +489,10 @@ class LieMPC {
   {
     // Build constraint matrices for MPC
     for (int i = 0; i < 4; i++) {
-      _t_input(i) = _inv_constraint(u_lin(i));
-
       for (int j = 1; j <= _np; j++) {
-        _u_bndh(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input(i), -j);
-        _u_bndl(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input(i), j);
+        _t_input = _inv_constraint(_U0(i + _nu * (j - 1)));
+        _u_bndh(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, -j);
+        _u_bndl(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, j);
       }
     }
   };
