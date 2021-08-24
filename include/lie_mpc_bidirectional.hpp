@@ -1,8 +1,6 @@
 #include <Eigen/Dense>
-#include <iostream>
 #include <math.h>
 #include <optimization.h>
-#include <unsupported/Eigen/MatrixFunctions>
 
 namespace al = alglib;
 
