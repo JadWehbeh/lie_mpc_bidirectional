@@ -12,6 +12,7 @@ target_include_directories(
   INTERFACE
   $<BUILD_INTERFACE:${${PROJECT_NAME}_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_include_directories(${PROJECT_NAME} INTERFACE ${ALGLIB_INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME} INTERFACE ${ALGLIB_LIBRARY})
 target_link_libraries(${PROJECT_NAME} INTERFACE Eigen3::Eigen)
 
@@ -36,7 +37,7 @@ write_basic_package_version_file("${PROJECT_NAME}ConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
   COMPATIBILITY SameMajorVersion)
 if(NOT INCLUDE_INSTALL_DIR)
-  set(INCLUDE_INSTALL_DIR include/hello)
+  set(INCLUDE_INSTALL_DIR include/lie_mpc_directional)
 endif()
 configure_package_config_file(
   "${PROJECT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in"
