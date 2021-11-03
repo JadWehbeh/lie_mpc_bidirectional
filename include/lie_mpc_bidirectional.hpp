@@ -67,8 +67,9 @@ class LieMPC {
   Eigen::VectorXd _U_lin;
 
   // Optimization variables
-  al::real_1d_array _U;             // Control input predictioni
+  al::real_1d_array _U;             // Control input prediction
   al::real_1d_array _U0;            // Initial control input
+  al::real_1d_array _Uc;            // Intermediate control input sequence
   al::real_2d_array _MPC_H;         // Quadratic program H matrix
   al::real_1d_array _MPC_F;         // Quadratic program F matrix
   Eigen::MatrixXd _MPC_H_Eig;       // Eigen Quadratic program H matrix
@@ -177,6 +178,7 @@ class LieMPC {
     _MPC_F_Eig.resize(_np * _nu);
     _U.setlength(_np * _nu);
     _U0.setlength(_np * _nu);
+    _Uc.setlength(_np * _nu);
     _u_bndl.setlength(_np * _nu);
     _u_bndh.setlength(_np * _nu);
 
@@ -368,14 +370,18 @@ class LieMPC {
     _eigen_to_al(_MPC_F_Eig, &_MPC_F);
     al::minqpsetquadraticterm(_qpstate, _MPC_H);
     al::minqpsetlinearterm(_qpstate, _MPC_F);
+    _init_constraints();
+    _U = _U0;
 
     for (int i = 0; i < 5; i++) {
-      _build_constraints();
       al::minqpsetbc(_qpstate, _u_bndl, _u_bndh);
-      al::minqpsetstartingpoint(_qpstate, _U0);
+      al::minqpsetstartingpoint(_qpstate, _U);
       al::minqpoptimize(_qpstate);
       al::minqpresults(_qpstate, _U, _qpreport);
-      _U0 = _U;
+      for (int j = 0; j < (_np * _nu); j++) {
+        _Uc(j) = _U0(j) - _U(j);
+      }
+      _build_constraints();
       if (_check_bounds(_U, _u_bndl, _u_bndh)) {
         break;
       }
@@ -490,14 +496,29 @@ class LieMPC {
     return 1;
   };
 
+  void _init_constraints()
+  {
+    // Build constraint matrices for MPC
+    for (int i = 0; i < 4; i++) {
+      _t_input = _inv_constraint(_U0(i));
+     for (int j = 1; j <= _np; j++) {
+        _u_bndh(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, -j);
+        _u_bndl(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, j);
+      }
+    }
+  };
+
   void _build_constraints()
   {
     // Build constraint matrices for MPC
     for (int i = 0; i < 4; i++) {
-      for (int j = 1; j <= _np; j++) {
-        _t_input = _inv_constraint(_U0(i + _nu * (j - 1)));
-        _u_bndh(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, -j);
-        _u_bndl(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, j);
+      _t_input = _inv_constraint(_U0(i));
+      _u_bndh(i) = _U0(i) - _constraint(_t_input, -1);
+      _u_bndl(i) = _U0(i) - _constraint(_t_input, 1);
+      for (int j = 2; j <= _np; j++) {
+        _t_input = _inv_constraint(_Uc(i + _nu * (j - 2)));
+        _u_bndh(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, -1);
+        _u_bndl(i + _nu * (j - 1)) = _U0(i + _nu * (j - 1)) - _constraint(_t_input, 1);
       }
     }
   };
