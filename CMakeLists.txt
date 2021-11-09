@@ -37,7 +37,7 @@ write_basic_package_version_file("${PROJECT_NAME}ConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
   COMPATIBILITY SameMajorVersion)
 if(NOT INCLUDE_INSTALL_DIR)
-  set(INCLUDE_INSTALL_DIR include/lie_mpc_directional)
+  set(INCLUDE_INSTALL_DIR include/lie_mpc_bidirectional)
 endif()
 configure_package_config_file(
   "${PROJECT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in"
