@@ -323,8 +323,8 @@ class LieMPC {
     // Build prediction matrices for MPC
     _Ak = Eigen::MatrixXd::Identity(_nx, _nx);
     _ABk = _B;
-    _Afk = _ts * (_f + (_ts / 2) * _f_t);
-
+    _Afk = _ts * (_f + (_ts / 2.) * _f_t);
+    
     for (int i = 0; i < _np; i++) {
 
       if (i != 0) {
@@ -410,8 +410,12 @@ class LieMPC {
   Eigen::Vector3d _vee_SO3(Eigen::Matrix3d _rotMatrix)
   {
     _phi = acos((_rotMatrix.trace() - 1) / 2);
+    if (_phi == 0.0) {
+      return (Eigen::VectorXd(3) << 0,0,0).finished();
+    } else { 
     _sphi = _phi / sin(_phi);
     return (Eigen::VectorXd(3) << _sphi * (_rotMatrix(1, 2) - _rotMatrix(2, 1)) / 2., _sphi * (-_rotMatrix(0, 2) + _rotMatrix(2, 0)) / 2., _sphi * (_rotMatrix(0, 1) - _rotMatrix(1, 0)) / 2.).finished();
+    }
   };
 
   double _constraint(double _init_time, int _timesteps)
