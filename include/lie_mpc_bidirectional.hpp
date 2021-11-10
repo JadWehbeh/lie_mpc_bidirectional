@@ -184,9 +184,7 @@ class LieMPC {
 
     // Initialize matrix values
     _H = Eigen::MatrixXd::Zero(_nx * _np, _nu * _np);
-    _F = Eigen::VectorXd::Zero(_nx * _np);
     _H_f = Eigen::MatrixXd::Zero(_nx, _nu * _np);
-    _F_f = Eigen::VectorXd::Zero(_nx);
     _G = Eigen::MatrixXd::Zero(_nx * _np, _nx);
     _C_bar = Eigen::MatrixXd::Zero(_ny * _np, _nx * _np);
     _Q = Eigen::MatrixXd::Zero(_ny * _np, _ny * _np);
@@ -251,9 +249,7 @@ class LieMPC {
 
     // Initialize matrix values
     _H = Eigen::MatrixXd::Zero(_nx * _np, _nu * _np);
-    _F = Eigen::VectorXd::Zero(_nx * _np);
     _H_f = Eigen::MatrixXd::Zero(_nx, _nu * _np);
-    _F_f = Eigen::VectorXd::Zero(_nx);
     _G = Eigen::MatrixXd::Zero(_nx * _np, _nx);
     _C_bar = Eigen::MatrixXd::Zero(_ny * _np, _nx * _np);
     _Q = Eigen::MatrixXd::Zero(_ny * _np, _ny * _np);
@@ -324,7 +320,9 @@ class LieMPC {
     _Ak = Eigen::MatrixXd::Identity(_nx, _nx);
     _ABk = _B;
     _Afk = _ts * (_f + (_ts / 2.) * _f_t);
-    
+    _F = Eigen::VectorXd::Zero(_nx * _np);
+    _F_f = Eigen::VectorXd::Zero(_nx);
+
     for (int i = 0; i < _np; i++) {
 
       if (i != 0) {
@@ -412,7 +410,7 @@ class LieMPC {
     _phi = acos((_rotMatrix.trace() - 1) / 2);
     if (_phi == 0.0) {
       return (Eigen::VectorXd(3) << 0,0,0).finished();
-    } else { 
+    } else {
     _sphi = _phi / sin(_phi);
     return (Eigen::VectorXd(3) << _sphi * (_rotMatrix(1, 2) - _rotMatrix(2, 1)) / 2., _sphi * (-_rotMatrix(0, 2) + _rotMatrix(2, 0)) / 2., _sphi * (_rotMatrix(0, 1) - _rotMatrix(1, 0)) / 2.).finished();
     }
